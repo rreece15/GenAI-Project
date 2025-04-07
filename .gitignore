@@ -1,1 +1,4 @@
 llama
+weights
+*.pth
+data
