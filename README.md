@@ -29,3 +29,7 @@ huggingface-cli login
 ```
 
 3. Add Hugging Face token
+
+
+conda_env is just the mac_env converted to conda
+
