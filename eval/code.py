@@ -63,9 +63,7 @@ def generate_candidates(
         # Process batch when enough samples are collected or at end of dataset
         if len(prompts) == batch_size or i == len(dataset) - 1:
             # Process batch when enough samples are collected or at end of dataset
-            inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(
-                model.device
-            )
+            inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
             for _ in range(k // per_sample):
                 with torch.no_grad():
                     output_ids = model.generate(
@@ -76,9 +74,7 @@ def generate_candidates(
                         num_return_sequences=k,
                     )
                 # Decode and split outputs per prompt; output_ids is [batch_size * k, ...]
-                decoded_outputs = tokenizer.batch_decode(
-                    output_ids, skip_special_tokens=True
-                )
+                decoded_outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
                 for j in range(len(prompts)):
                     candidate_completions = decoded_outputs[j * k : (j + 1) * k]
                     meta_info[j]["candidates"] = candidate_completions
@@ -91,9 +87,7 @@ def generate_candidates(
             if save_path and len(candidates) % save_every < batch_size:
                 with open(save_path, "w") as f:
                     json.dump(candidates, f)
-                print(
-                    f"Candidates saved to {save_path} after processing {i + 1} samples."
-                )
+                print(f"Candidates saved to {save_path} after processing {i + 1} samples.")
 
     # Final save in case there are unsaved candidates
     if save_path:
@@ -134,9 +128,7 @@ if __name__ == "__main__":
     k = 5
     max_new_tokens = 256
     temperature = 0.2
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.float16, device_map="auto"
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, device_map="auto")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     dataset = load_from_disk("data/humaneval_dataset")["test"]
 
