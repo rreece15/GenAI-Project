@@ -29,7 +29,8 @@ def generate_candidates(
     tokenizer,
     dataset,
     batch_size=8,
-    k=10,
+    per_sample=5,
+    k=50,  # K needs to be divisible by per_sample
     max_new_tokens=256,
     temperature=0.2,
     save_path=None,
@@ -61,28 +62,30 @@ def generate_candidates(
 
         # Process batch when enough samples are collected or at end of dataset
         if len(prompts) == batch_size or i == len(dataset) - 1:
+            # Process batch when enough samples are collected or at end of dataset
             inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(
                 model.device
             )
-            with torch.no_grad():
-                output_ids = model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    do_sample=True,
-                    num_return_sequences=k,
+            for _ in range(k // per_sample):
+                with torch.no_grad():
+                    output_ids = model.generate(
+                        **inputs,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        do_sample=True,
+                        num_return_sequences=k,
+                    )
+                # Decode and split outputs per prompt; output_ids is [batch_size * k, ...]
+                decoded_outputs = tokenizer.batch_decode(
+                    output_ids, skip_special_tokens=True
                 )
-            # Decode and split outputs per prompt; output_ids is [batch_size * k, ...]
-            decoded_outputs = tokenizer.batch_decode(
-                output_ids, skip_special_tokens=True
-            )
-            for j in range(len(prompts)):
-                candidate_completions = decoded_outputs[j * k : (j + 1) * k]
-                meta_info[j]["candidates"] = candidate_completions
-                candidates.append(meta_info[j])
+                for j in range(len(prompts)):
+                    candidate_completions = decoded_outputs[j * k : (j + 1) * k]
+                    meta_info[j]["candidates"] = candidate_completions
+                    candidates.append(meta_info[j])
 
-            # Reset for next batch
-            prompts, meta_info = [], []
+                # Reset for next batch
+                prompts, meta_info = [], []
 
             # Periodically save candidates if a file path is provided
             if save_path and len(candidates) % save_every < batch_size:
@@ -103,7 +106,7 @@ def generate_candidates(
 
 def evaluate_candidates(
     candidates,
-    k=10,
+    k,
 ):
     # Load the model and tokenizer
 
@@ -111,13 +114,18 @@ def evaluate_candidates(
     pass_at_k, results = code_eval_metric.compute(
         predictions=[c["candidates"] for c in candidates],
         references=[c["test"] for c in candidates],
-        k=[1, k],
+        k=k,
         num_workers=4,
     )
 
     print("Evaluation results:")
-    for k in [1, k]:
-        print(f"Pass@{k}: {pass_at_k[f'pass@{k}'] * 100:.2f}%")
+    for e in k:
+        print(f"Pass@{e}: {pass_at_k[f'pass@{e}'] * 100:.2f}%")
+
+    return {
+        "pass_at_k": pass_at_k,
+        "results": results,
+    }
 
 
 if __name__ == "__main__":
