@@ -2,3 +2,4 @@ llama
 weights
 *.pth
 data
+__pycache__
