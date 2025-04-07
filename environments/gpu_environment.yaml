@@ -29,3 +29,4 @@ dependencies:
   - flask-cors
   - pyparsing
   - flash-attn
+  - evaluate
