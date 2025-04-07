@@ -8,6 +8,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 
 def save_candidates(candidates, file_path):
@@ -27,73 +28,76 @@ def generate_candidates(
     model,
     tokenizer,
     dataset,
+    batch_size=8,
     k=10,
     max_new_tokens=256,
     temperature=0.2,
     save_path=None,
+    save_every=5,  # Save after processing every 5 samples
 ):
-    """
-    Generates k candidate completions for each sample in the dataset using batched generation.
-
-    Each sample is expected to be a dict with keys "prompt", "entry_point", and "test".
-
-    Args:
-        model: The language model to use for generation.
-        tokenizer: The corresponding tokenizer.
-        dataset: The dataset containing HumanEval examples.
-        k (int): Number of completions to generate per prompt.
-        max_new_tokens (int): Maximum tokens to generate.
-        temperature (float): Sampling temperature.
-        save_path (str): Optional path to save the candidates.
-
-    Returns:
-        list: A list of candidate dictionaries.
-    """
     model.eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Resize model embeddings if new tokens were added
+    # Resize embeddings if needed
     if len(tokenizer) > model.config.vocab_size:
         model.resize_token_embeddings(len(tokenizer))
 
     candidates = []
-    for i, sample in enumerate(tqdm(dataset, desc="Generating candidates")):
-        # Ensure the sample is a dict with the expected keys
-        if not isinstance(sample, dict):
-            raise ValueError(
-                f"Expected sample to be a dict, got {type(sample)}: {sample}"
-            )
-        prompt = sample["prompt"]
-        entry_point = sample["entry_point"]
-        test = sample["test"]
+    prompts = []
+    meta_info = []
 
-        # Batch generation: generate k completions in one call
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=True,
-                num_return_sequences=k,  # Generates k completions in one batch call
-            )
-        candidate_completions = tokenizer.batch_decode(
-            output_ids, skip_special_tokens=True
-        )
-        candidates.append(
+    for i, sample in enumerate(tqdm(dataset, desc="Generating candidates")):
+        # Collect the prompts and associated metadata
+        prompts.append(sample["prompt"])
+        meta_info.append(
             {
                 "task_id": f"humaneval_{i}",
-                "prompt": prompt,
-                "entry_point": entry_point,
-                "test": test,
-                "candidates": candidate_completions,
+                "prompt": sample["prompt"],
+                "entry_point": sample["entry_point"],
+                "test": sample["test"],
             }
         )
+
+        # Process batch when enough samples are collected or at end of dataset
+        if len(prompts) == batch_size or i == len(dataset) - 1:
+            inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(
+                model.device
+            )
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=True,
+                    num_return_sequences=k,
+                )
+            # Decode and split outputs per prompt; output_ids is [batch_size * k, ...]
+            decoded_outputs = tokenizer.batch_decode(
+                output_ids, skip_special_tokens=True
+            )
+            for j in range(len(prompts)):
+                candidate_completions = decoded_outputs[j * k : (j + 1) * k]
+                meta_info[j]["candidates"] = candidate_completions
+                candidates.append(meta_info[j])
+
+            # Reset for next batch
+            prompts, meta_info = [], []
+
+            # Periodically save candidates if a file path is provided
+            if save_path and len(candidates) % save_every < batch_size:
+                with open(save_path, "w") as f:
+                    json.dump(candidates, f)
+                print(
+                    f"Candidates saved to {save_path} after processing {i + 1} samples."
+                )
+
+    # Final save in case there are unsaved candidates
     if save_path:
         with open(save_path, "w") as f:
             json.dump(candidates, f)
-        print(f"Candidates saved to {save_path}")
+        print(f"Final candidates saved to {save_path}")
+
     return candidates
 
 
@@ -122,7 +126,9 @@ if __name__ == "__main__":
     k = 5
     max_new_tokens = 256
     temperature = 0.2
-    model = AutoModelForCausalLM.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, torch_dtype=torch.float16, device_map="auto"
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     dataset = load_from_disk("data/humaneval_dataset")["test"]
 
