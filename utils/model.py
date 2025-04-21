@@ -10,6 +10,7 @@ def load_peft_model(
     adapter_ids: Dict[str, str],
     device_map: str = "auto",
     torch_dtype: torch.dtype = torch.float16,
+    combination_type: str = "linear",
 ) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
     """
     Load a base model and multiple adapter checkpoints from Hugging Face Hub,
@@ -54,7 +55,7 @@ def load_peft_model(
     weights = [1.0 / num_adapters] * num_adapters
 
     # Add a weighted (linear) merged adapter from the loaded adapters
-    model.add_weighted_adapter(adapters=adapter_names, weights=weights, adapter_name="merged", combination_type="linear")
+    model.add_weighted_adapter(adapters=adapter_names, weights=weights, adapter_name="merged", combination_type=combination_type)
     model.set_adapter("merged")
 
     # Fix pad token if necessary.
