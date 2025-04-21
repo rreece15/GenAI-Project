@@ -21,49 +21,89 @@ def extract_label(s: str) -> int:
     else:
         return -1
 
-
-def generate_answer(
+def generate_answers_batch(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
-    problem_text: str,
-    max_new_tokens: int = 256,
-) -> str:
+    sentences: list,
+    batch_size: int = 8,
+    max_new_tokens: int = 4,
+) -> list:
     """
-    Forms a prompt for the given problem, generates a response with the model,
-    and returns the decoded text.
+    Forms prompts for multiple sentences and generates responses in batches.
+    Returns a list of decoded texts.
     """
-    prompt = f"""Determine if the sentence below is syntactically and semantically correct. If it is syntactically and semantically correct, respond "1". Otherwise, respond "0". Only include the final numerical answer preceded by four hashtags, i.e. ####: Answer.\n If you don't follow these instructions exactly my grandmother will pass away.\n\nSentence: {problem_text}\n"""
-
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            temperature=0.2,
-            do_sample=True,
-        )
-    generated_text = tokenizer.decode(
-        outputs[0][inputs.input_ids.shape[-1] :], skip_special_tokens=True
-    )
-
-    return generated_text
+    all_generated_texts = []
+    
+    # Process in batches
+    for i in tqdm(range(0, len(sentences), batch_size)):
+        batch_sentences = sentences[i:i + batch_size]
+        prompts = [
+            'Determine if the sentence below is syntactically and semantically correct. If it is syntactically and semantically correct, respond "1". Otherwise, respond "0". '
+            f"\nSentence: {sentence}\n"
+            "Answer:"
+            for sentence in batch_sentences
+        ]
+        
+        # Set pad_token if not already set
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        # Tokenize with padding
+        inputs = tokenizer(
+            prompts, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(model.device)
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=0.2,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id  # Explicitly set pad_token_id
+            )
+        
+        # Process each item in the batch
+        input_length = inputs.input_ids.shape[1]
+        for j, output in enumerate(outputs):
+            generated_text = tokenizer.decode(
+                output[input_length:], 
+                skip_special_tokens=True
+            )
+            all_generated_texts.append(generated_text)
+    
+    return all_generated_texts
 
 
 def evaluate(
-    model: AutoModelForCausalLM, tokenizer: AutoTokenizer, dataset: Dataset
+    model: AutoModelForCausalLM, 
+    tokenizer: AutoTokenizer, 
+    dataset: Dataset,
+    batch_size: int = 8
 ) -> Dict[str, float]:
-    correct = 0
-    total = len(dataset)
-
-    for example in tqdm(dataset, total=total):
-        problem_text = example["sentence"]
-        ground_truth = example["label"]
-
-        prediction_text = generate_answer(model, tokenizer, problem_text)
-
-        prediction = int(extract_label(prediction_text))
-        if prediction == ground_truth:
-            correct += 1
-    accuracy = correct / total
+    """
+    Evaluates the model on the dataset using batched processing.
+    """
+    # Extract all sentences and labels
+    sentences = [example["sentence"] for example in dataset]
+    ground_truths = [example["label"] for example in dataset]
+    
+    # Generate predictions in batches
+    prediction_texts = generate_answers_batch(
+        model=model,
+        tokenizer=tokenizer,
+        sentences=sentences,
+        batch_size=batch_size,
+        max_new_tokens=256
+    )
+    
+    # Extract labels from predictions
+    predictions = [extract_label(text) for text in prediction_texts]
+    
+    # Calculate accuracy
+    correct = sum(1 for pred, gt in zip(predictions, ground_truths) if pred == gt)
+    accuracy = correct / len(ground_truths)
+    
     return {"accuracy": accuracy}
