@@ -3,3 +3,4 @@ llama
 data
 offload
 __pycache__
+weights/merge_adapter
