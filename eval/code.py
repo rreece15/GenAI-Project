@@ -36,6 +36,8 @@ def generate_candidates(
     save_path=None,
     save_every=5,  # Save after processing every 5 samples
 ):
+    model = model.half()        # convert to half precision (if your GPU supports it)
+    model = torch.compile(model) 
     model.eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -65,7 +67,7 @@ def generate_candidates(
             # Process batch when enough samples are collected or at end of dataset
             inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
             for _ in range(k // per_sample):
-                with torch.no_grad():
+                with torch.inference_mode():
                     output_ids = model.generate(
                         **inputs,
                         max_new_tokens=max_new_tokens,
